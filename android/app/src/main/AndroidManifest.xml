@@ -6,6 +6,8 @@
 
     <application
         android:label="Dumb VPN"
+        android:icon="@drawable/ic_goose"
+        android:roundIcon="@drawable/ic_goose"
         android:allowBackup="false"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault">

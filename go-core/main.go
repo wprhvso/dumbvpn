@@ -455,6 +455,8 @@ func runEngineInstance(ctx context.Context, fd int) {
 	}
 
 	patterns := []string{
+		"*.ru",
+		
 		// === Внутренние сети и локальная инфраструктура ===
 		"*.internal",
 		"*.local",
