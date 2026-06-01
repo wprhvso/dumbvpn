@@ -16,7 +16,7 @@ class MyVpnService : VpnService() {
 
     companion object {
         init {
-            System.loadLibrary("h2core")
+            System.loadLibrary("dumbvpn")
         }
     }
 

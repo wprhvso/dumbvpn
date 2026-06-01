@@ -1,4 +1,4 @@
-module h2core
+module dumbvpn
 
 go 1.26.3
 
