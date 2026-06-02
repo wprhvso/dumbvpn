@@ -51,6 +51,13 @@ var (
 	platformInit = func() {}
 )
 
+
+var bypassPorts = map[string]bool{
+	"22":   true,
+	"123":  true,
+	"4460": true,
+}
+
 type CustomRelayConnector struct {
 	originalConnector cconnector.Connector
 	bypassIPs         *sync.Map
@@ -73,6 +80,14 @@ func (c *CustomRelayConnector) Connect(ctx context.Context, conn net.Conn, netwo
 			conn.Close()
 		}
 		return net.Dial("udp", "127.0.0.1:10533")
+	}
+
+	if bypassPorts[port] {
+		sendLog("[Bypass-Port] Connecting DIRECTLY to %s over %s (Bypassing port %s)...", address, network, port)
+		if conn != nil {
+			conn.Close()
+		}
+		return net.Dial(network, address)
 	}
 
 	parsedIP := net.ParseIP(host)
