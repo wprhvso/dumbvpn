@@ -486,6 +486,7 @@ func runEngineInstance(ctx context.Context, fd int) {
 		"*.drweb.com",
 		"*.2gis.com",
 		"*.doublegis.com",
+		"*.bybit.com",
 	}
 
 	engineWG.Add(1)
