@@ -15,7 +15,9 @@ Thumbs.db
 *.tmp
 *.bak
 
+.android/
 .direnv/
+.devenv/
 result
 result-*
 

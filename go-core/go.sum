@@ -22,8 +22,8 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nosvA=
 github.com/fsnotify/fsnotify v1.7.0/go.mod h1:40Bi/Hjc2AVfZrqy+aj+yEI+/bRxZnMJyTJwOpGvigM=
-github.com/go-gost/core v0.4.0 h1:jLuIMO7ZMJX/BDCYLrYXAmIykT+HkqEuzaTeLMdrY1c=
-github.com/go-gost/core v0.4.0/go.mod h1:WGI43jOka7FAsSAwi/fSMaqxdR+E339ycb4NBGlFr6A=
+github.com/go-gost/core v0.4.1 h1:/MZYv0tSkw9yoK2nl0GLl3GjT1/3qKl5u3E/DADyeZE=
+github.com/go-gost/core v0.4.1/go.mod h1:WGI43jOka7FAsSAwi/fSMaqxdR+E339ycb4NBGlFr6A=
 github.com/go-gost/gosocks4 v0.1.0 h1:eAzev6qw4fzkFQKC9uCHLVNnnPdHyqCggbnfNN80Pmk=
 github.com/go-gost/gosocks4 v0.1.0/go.mod h1:hzVjwijJuZR1pp3GqpTj+AKcSGrx68RlWTrQMFMYBP0=
 github.com/go-gost/gosocks5 v0.5.0 h1:YE37l1MJwde8diIQdynStqogMotG5enoTdborhA5yic=
@@ -143,6 +143,8 @@ github.com/vishvananda/netns v0.0.4 h1:Oeaw1EM2JMxD51g9uhtC0D7erkIjgmj8+JZc26m1Y
 github.com/vishvananda/netns v0.0.4/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 github.com/vulcand/predicate v1.2.0 h1:uFsW1gcnnR7R+QTID+FVcs0sSYlIGntoGOTb3rQJt50=
 github.com/vulcand/predicate v1.2.0/go.mod h1:VipoNYXny6c8N381zGUWkjuuNHiRbeAZhE7Qm9c+2GA=
+github.com/wprhvso/gost-x v0.0.0-20260602102551-942131dafcf5 h1:W6PsHOGY5j4L5FLWYs+JceuGXqGpKiSqkXd7tdnPJPg=
+github.com/wprhvso/gost-x v0.0.0-20260602102551-942131dafcf5/go.mod h1:rlFAe9jHSKCEmbps70sZxiU+Wdv3zB6+Li/AqjCUQSM=
 github.com/xjasonlyu/tun2socks/v2 v2.6.0 h1:gI9saJT3XgH4e6v9jBuHRLwK7l3aN9YFWec/SsDTDx4=
 github.com/xjasonlyu/tun2socks/v2 v2.6.0/go.mod h1:35AwqxIxnMkfBfT0UJ1Lku7PZm2ZiZJ8sxHyp0gt1yw=
 github.com/xtaci/smux v1.5.31 h1:3ha7sHtH46h85Iv7MfQogxasuRt1KPRhoFB3S4rmHgU=

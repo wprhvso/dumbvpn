@@ -3,8 +3,10 @@ module dumbvpn
 go 1.26.3
 
 require (
-	github.com/go-gost/core v0.4.0
+	github.com/go-gost/core v0.4.1
 	github.com/go-gost/x v0.10.3
+	github.com/gobwas/glob v0.2.3
+	github.com/miekg/dns v1.1.61
 )
 
 require (
@@ -20,7 +22,6 @@ require (
 	github.com/go-gost/relay v0.6.0 // indirect
 	github.com/go-gost/tls-dissector v0.2.0 // indirect
 	github.com/go-redis/redis/v8 v8.11.5 // indirect
-	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
@@ -28,7 +29,6 @@ require (
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/jonboulle/clockwork v0.2.2 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
-	github.com/miekg/dns v1.1.61 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
@@ -76,4 +76,4 @@ require (
 	gvisor.dev/gvisor v0.0.0-20250523182742-eede7a881b20 // indirect
 )
 
-replace github.com/go-gost/x => /home/user/x
+replace github.com/go-gost/x => github.com/wprhvso/gost-x v0.0.0-20260602102551-942131dafcf5
