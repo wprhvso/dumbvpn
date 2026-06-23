@@ -18,6 +18,14 @@ var (
 	detectedIface   string
 )
 
+var bypassCIDRs = []string{
+	"10.0.0.0/8",     // RFC1918
+	"172.16.0.0/12",  // RFC1918
+	"192.168.0.0/16", // RFC1918
+	"100.64.0.0/10",  // CGNAT (Tailscale и т.п.)
+	"169.254.0.0/16", // link-local
+}
+
 func init() {
 	sendLog = linuxSendLog
 	platformInit = func() {}
@@ -53,6 +61,23 @@ func detectNetwork() (gateway string, iface string, err error) {
 	return gateway, iface, nil
 }
 
+func addBypassRoutes(gateway, iface string) {
+	for _, cidr := range bypassCIDRs {
+		runCmd("ip", "route", "del", cidr, "via", gateway, "dev", iface)
+		if err := runCmd("ip", "route", "add", cidr, "via", gateway, "dev", iface); err != nil {
+			linuxSendLog("Warning: failed to add bypass route %s: %v", cidr, err)
+		} else {
+			linuxSendLog("Bypass route added: %s -> %s (%s)", cidr, gateway, iface)
+		}
+	}
+}
+
+func delBypassRoutes(gateway, iface string) {
+	for _, cidr := range bypassCIDRs {
+		runCmd("ip", "route", "del", cidr, "via", gateway, "dev", iface)
+	}
+}
+
 func main() {
 	if os.Getenv("GODEBUG") != "netdns=go" {
 		os.Setenv("GODEBUG", "netdns=go")
@@ -84,10 +109,10 @@ func main() {
 	runCmd("ip", "route", "add", "79.137.207.89", "via", gateway, "dev", iface)
 
 	runCmd("ip", "rule", "add", "fwmark", "0x1", "table", "100")
-	
+
 	runCmd("iptables", "-t", "mangle", "-D", "OUTPUT", "-m", "owner", "--gid-owner", "10001", "-j", "MARK", "--set-mark", "0x1")
 	runCmd("iptables", "-t", "mangle", "-A", "OUTPUT", "-m", "owner", "--gid-owner", "10001", "-j", "MARK", "--set-mark", "0x1")
-	
+
 	runCmd("iptables", "-t", "nat", "-D", "POSTROUTING", "-o", iface, "-j", "MASQUERADE")
 	runCmd("iptables", "-t", "nat", "-A", "POSTROUTING", "-o", iface, "-j", "MASQUERADE")
 
@@ -107,6 +132,10 @@ func main() {
 		linuxSendLog("tungo interface detected! Activating global routing...")
 		runCmd("ip", "route", "add", "0.0.0.0/1", "dev", "tungo")
 		runCmd("ip", "route", "add", "128.0.0.0/1", "dev", "tungo")
+
+		linuxSendLog("Installing private-range bypass routes...")
+		addBypassRoutes(gateway, iface)
+
 		runCmd("resolvectl", "dns", "tungo", "10.0.0.1")
 		runCmd("resolvectl", "domain", "tungo", "~.")
 		linuxSendLog("VPN is fully established and routed. Enjoy!")
@@ -120,6 +149,7 @@ func main() {
 	sig := <-sigs
 	linuxSendLog("Received signal: %v. Cleaning up network rules...", sig)
 
+	delBypassRoutes(detectedGateway, detectedIface)
 	runCmd("ip", "route", "del", "0.0.0.0/1", "dev", "tungo")
 	runCmd("ip", "route", "del", "128.0.0.0/1", "dev", "tungo")
 	runCmd("resolvectl", "revert", "tungo")
