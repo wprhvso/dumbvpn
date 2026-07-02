@@ -20,16 +20,13 @@ irm -Headers @{Authorization="token $($env:GITHUB_TOKEN)"} `
 The script will:
 
 - ask for Administrator elevation (needed to install the Windows service)
-- install Git and Go via `winget` if they're not already present
-- clone this repo and build `dumbvpn.exe` from source with `go build`
-  (there are no prebuilt release binaries — first run downloads Go modules,
-  so it needs internet access and can take a minute or two)
-- download the matching-architecture `wintun.dll` from the official
-  [wintun.net](https://www.wintun.net/) distribution and place it next to
-  the built exe (this is a signed driver DLL, not something compiled from
-  Go source)
+- download `dumbvpn.exe` and `wintun.dll` from the latest GitHub Release
 - install everything to `C:\Program Files\DumbVPN\` and register/start it as
   an auto-starting Windows service named `DumbVPN`
+
+Releases are built and published from `.github/workflows/release.yml`, run
+manually via `Actions → Release → Run workflow` on a version tag (e.g.
+`v0.1.3`).
 
 Check status any time with `Get-Service DumbVPN`.
 
