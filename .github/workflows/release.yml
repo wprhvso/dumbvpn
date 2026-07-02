@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v0.1.3)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-core/go.mod
+
+      - name: Build dumbvpn.exe
+        working-directory: go-core
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dumbvpn.exe .
+
+      - name: Fetch wintun.dll
+        run: |
+          curl -sSL -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          unzip -q wintun.zip -d wintun-extract
+          cp wintun-extract/wintun/bin/amd64/wintun.dll wintun.dll
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.version }}" \
+            go-core/dumbvpn.exe wintun.dll \
+            --title "${{ inputs.version }}" \
+            --generate-notes
