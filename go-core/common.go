@@ -20,11 +20,11 @@ import (
 	_ "github.com/go-gost/x/handler/tungo"
 	_ "github.com/go-gost/x/listener/tungo"
 
-	_ "github.com/go-gost/x/listener/tcp"
 	_ "github.com/go-gost/x/handler/auto"
 	_ "github.com/go-gost/x/handler/http"
 	_ "github.com/go-gost/x/handler/socks/v4"
 	_ "github.com/go-gost/x/handler/socks/v5"
+	_ "github.com/go-gost/x/listener/tcp"
 
 	cconnector "github.com/go-gost/core/connector"
 	cmetadata "github.com/go-gost/core/metadata"
@@ -46,11 +46,14 @@ var (
 	engineCancel   context.CancelFunc
 	engineWG       sync.WaitGroup
 
-	// Переопределяемые платформой функции
 	sendLog      = func(format string, args ...interface{}) { fmt.Printf(format+"\n", args...) }
 	platformInit = func() {}
-)
 
+	directDialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, address)
+	}
+)
 
 var bypassPorts = map[string]bool{
 	"22":   true,
@@ -87,7 +90,7 @@ func (c *CustomRelayConnector) Connect(ctx context.Context, conn net.Conn, netwo
 		if conn != nil {
 			conn.Close()
 		}
-		return net.Dial(network, address)
+		return directDialContext(ctx, network, address)
 	}
 
 	parsedIP := net.ParseIP(host)
@@ -97,7 +100,7 @@ func (c *CustomRelayConnector) Connect(ctx context.Context, conn net.Conn, netwo
 			if conn != nil {
 				conn.Close()
 			}
-			return net.Dial(network, address)
+			return directDialContext(ctx, network, address)
 		}
 	}
 
@@ -107,7 +110,7 @@ func (c *CustomRelayConnector) Connect(ctx context.Context, conn net.Conn, netwo
 		if conn != nil {
 			conn.Close()
 		}
-		return net.Dial(network, address)
+		return directDialContext(ctx, network, address)
 	}
 
 	return c.originalConnector.Connect(ctx, conn, network, address, opts...)
@@ -381,7 +384,7 @@ func runEngineInstance(ctx context.Context, fd int) {
 				Name: "service-0",
 				Addr: "tungo",
 				Listener: &config.ListenerConfig{
-					Type: "tungo",
+					Type:     "tungo",
 					Metadata: tunMetadata,
 				},
 				Handler: &config.HandlerConfig{

@@ -35,11 +35,16 @@ var bypassRoutes = []struct{ dest, mask string }{
 	{"169.254.0.0", "255.255.0.0"},
 }
 
-var elog debug.Log
+var (
+	elog            debug.Log
+	detectedGateway string
+	monitorStop     chan struct{}
+)
 
 func init() {
 	sendLog = windowsSendLog
 	platformInit = func() {}
+	directDialContext = windowsDirectDial
 }
 
 func windowsSendLog(format string, args ...interface{}) {
@@ -133,7 +138,9 @@ func (m *vpnService) Execute(args []string, r <-chan svc.ChangeRequest, changes 
 	changes <- svc.Status{State: svc.StartPending}
 
 	windowsSendLog("Service starting. Initializing network and VPN engine...")
+	monitorStop = make(chan struct{})
 	setupWindowsNetwork()
+	go monitorNetworkChanges(monitorStop)
 	go startVpnEngine(0)
 
 	changes <- svc.Status{State: svc.Running, Accepts: accepted}
@@ -153,6 +160,7 @@ loop:
 	}
 
 	changes <- svc.Status{State: svc.StopPending}
+	close(monitorStop)
 	stopVpnEngineInternal()
 	cleanupWindowsNetwork()
 	changes <- svc.Status{State: svc.Stopped}
@@ -246,31 +254,41 @@ func runCmd(name string, args ...string) error {
 	return err
 }
 
-func detectGateway() (string, error) {
+func detectGatewayAndIface() (string, uint32, error) {
 	out, err := exec.Command("route", "print", "-4").Output()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 4 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
+		if len(fields) >= 5 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
 			gw := fields[2]
-			if net.ParseIP(gw) != nil {
-				return gw, nil
+			localAddr := fields[3]
+			if net.ParseIP(gw) == nil {
+				continue
 			}
+			ifcs, err := net.Interfaces()
+			if err != nil {
+				return gw, 0, nil
+			}
+			for _, ifc := range ifcs {
+				addrs, aerr := ifc.Addrs()
+				if aerr != nil {
+					continue
+				}
+				for _, a := range addrs {
+					if ipn, ok := a.(*net.IPNet); ok && ipn.IP.String() == localAddr {
+						return gw, uint32(ifc.Index), nil
+					}
+				}
+			}
+			return gw, 0, nil
 		}
 	}
-	return "", fmt.Errorf("failed to find default gateway in route print output")
+	return "", 0, fmt.Errorf("failed to find default gateway in route print output")
 }
 
-func setupWindowsNetwork() {
-	gateway, err := detectGateway()
-	if err != nil {
-		windowsSendLog("CRITICAL: failed to detect physical gateway: %v", err)
-		return
-	}
-	windowsSendLog("Detected physical gateway: %s", gateway)
-
+func pinRoutes(gateway string) {
 	runCmd("route", "delete", serverIP)
 	if err := runCmd("route", "add", serverIP, "mask", "255.255.255.255", gateway); err == nil {
 		windowsSendLog("Server route pinned: %s -> %s", serverIP, gateway)
@@ -282,6 +300,19 @@ func setupWindowsNetwork() {
 			windowsSendLog("Bypass route added: %s/%s -> %s", b.dest, b.mask, gateway)
 		}
 	}
+}
+
+func setupWindowsNetwork() {
+	gateway, ifIndex, err := detectGatewayAndIface()
+	if err != nil {
+		windowsSendLog("CRITICAL: failed to detect physical gateway: %v", err)
+		return
+	}
+	detectedGateway = gateway
+	setPhysicalInterface(ifIndex)
+	windowsSendLog("Detected physical gateway: %s (interface index %d)", gateway, ifIndex)
+
+	pinRoutes(gateway)
 
 	go func() {
 		windowsSendLog("Waiting for the %s interface to be created by GOST/wintun...", tunIface)
@@ -303,6 +334,28 @@ func setupWindowsNetwork() {
 
 		windowsSendLog("VPN is fully established and routed. Enjoy!")
 	}()
+}
+
+func monitorNetworkChanges(stop <-chan struct{}) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			gw, idx, err := detectGatewayAndIface()
+			if err != nil {
+				continue
+			}
+			if gw != detectedGateway || (idx != 0 && idx != physIfaceIndex.Load()) {
+				windowsSendLog("Network change detected: gateway %s -> %s (interface index %d). Re-pinning routes...", detectedGateway, gw, idx)
+				detectedGateway = gw
+				setPhysicalInterface(idx)
+				pinRoutes(gw)
+			}
+		}
+	}
 }
 
 func cleanupWindowsNetwork() {
