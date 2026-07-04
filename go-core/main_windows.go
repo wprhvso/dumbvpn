@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,9 @@ const (
 
 	tunGateway = "10.0.0.1"
 	tunIface   = "tungo"
+
+	repoOwner = "wprhvso"
+	repoName  = "dumbvpn"
 )
 
 var bypassRoutes = []struct{ dest, mask string }{
@@ -62,11 +66,17 @@ func usage() {
 Usage: %s <command>
 
 Commands:
+  start       Start the service
+  stop        Stop the service
+  restart     Restart the service
+  status      Show service status
+  logs [n]    Show last n log entries (default 50)
+  update      Download and install the latest release
   install     Install the service with auto-start (Automatic) and start it
   uninstall   Stop and remove the service
-  run         Run the VPN engine (this is how the service and auto-start launch)
+  run         Run the VPN engine (this is how the service launches)
 
-The install/uninstall commands and the actual runtime require administrator privileges.
+Commands that manage the service require administrator privileges.
 `, os.Args[0])
 }
 
@@ -82,6 +92,47 @@ func main() {
 	}
 
 	switch strings.ToLower(os.Args[1]) {
+	case "start":
+		if err := startService(); err != nil {
+			fmt.Printf("Start failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Service started.")
+	case "stop":
+		if err := stopService(); err != nil {
+			fmt.Printf("Stop failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Service stopped.")
+	case "restart":
+		if err := stopService(); err != nil {
+			fmt.Printf("Stop failed: %v\n", err)
+			os.Exit(1)
+		}
+		if err := startService(); err != nil {
+			fmt.Printf("Start failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Service restarted.")
+	case "status":
+		if err := printStatus(); err != nil {
+			fmt.Printf("Status failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "logs":
+		n := "50"
+		if len(os.Args) >= 3 {
+			n = os.Args[2]
+		}
+		if err := printLogs(n); err != nil {
+			fmt.Printf("Logs failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "update":
+		if err := runUpdate(); err != nil {
+			fmt.Printf("Update failed: %v\n", err)
+			os.Exit(1)
+		}
 	case "install":
 		if err := installService(); err != nil {
 			fmt.Printf("Install failed: %v\n", err)
@@ -100,6 +151,139 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+func openService() (*mgr.Mgr, *mgr.Service, error) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to service manager (administrator privileges required?): %w", err)
+	}
+	s, err := m.OpenService(serviceName)
+	if err != nil {
+		m.Disconnect()
+		return nil, nil, fmt.Errorf("service %q is not installed: %w", serviceName, err)
+	}
+	return m, s, nil
+}
+
+func startService() error {
+	m, s, err := openService()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	defer s.Close()
+
+	status, err := s.Query()
+	if err == nil && status.State == svc.Running {
+		fmt.Println("Service is already running.")
+		return nil
+	}
+
+	if err := s.Start(); err != nil {
+		return err
+	}
+	return waitForState(s, svc.Running, 15*time.Second)
+}
+
+func stopService() error {
+	m, s, err := openService()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	defer s.Close()
+
+	status, err := s.Query()
+	if err == nil && status.State == svc.Stopped {
+		fmt.Println("Service is already stopped.")
+		return nil
+	}
+
+	if _, err := s.Control(svc.Stop); err != nil {
+		return err
+	}
+	return waitForState(s, svc.Stopped, 15*time.Second)
+}
+
+func waitForState(s *mgr.Service, want svc.State, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := s.Query()
+		if err != nil {
+			return err
+		}
+		if status.State == want {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for service state %d (current: %d)", want, status.State)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+func printStatus() error {
+	m, s, err := openService()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	defer s.Close()
+
+	status, err := s.Query()
+	if err != nil {
+		return err
+	}
+
+	stateNames := map[svc.State]string{
+		svc.Stopped:         "Stopped",
+		svc.StartPending:    "Starting...",
+		svc.StopPending:     "Stopping...",
+		svc.Running:         "Running",
+		svc.ContinuePending: "Resuming...",
+		svc.PausePending:    "Pausing...",
+		svc.Paused:          "Paused",
+	}
+	name, ok := stateNames[status.State]
+	if !ok {
+		name = fmt.Sprintf("Unknown (%d)", status.State)
+	}
+	fmt.Printf("Service:  %s\nState:    %s\n", serviceName, name)
+
+	if status.State == svc.Running {
+		if ifc, err := net.InterfaceByName(tunIface); err == nil {
+			fmt.Printf("Tunnel:   %s (index %d) is up\n", tunIface, ifc.Index)
+		} else {
+			fmt.Printf("Tunnel:   %s is NOT up\n", tunIface)
+		}
+	}
+	return nil
+}
+
+func printLogs(n string) error {
+	query := fmt.Sprintf("*[System[Provider[@Name='%s']]]", serviceName)
+	cmd := exec.Command("wevtutil", "qe", "Application", "/q:"+query, "/c:"+n, "/rd:true", "/f:text")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func runUpdate() error {
+	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/install.ps1", repoOwner, repoName)
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		return fmt.Errorf("GITHUB_TOKEN environment variable is not set (required for private repo)")
+	}
+	script := fmt.Sprintf(
+		"$env:GITHUB_TOKEN = '%s'; irm -Headers @{Authorization=\"token %s\"} '%s' | iex",
+		token, token, rawURL,
+	)
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
 }
 
 func runService() {
@@ -168,10 +352,155 @@ loop:
 	return false, 0
 }
 
-func installService() error {
-	exepath, err := os.Executable()
+// --- Network configuration (Windows: route.exe / netsh, no iptables/ip route equivalent) ---
+
+func setupWindowsNetwork() {
+	gateway, ifIndex, err := detectDefaultGateway()
 	if err != nil {
-		return fmt.Errorf("failed to determine executable path: %w", err)
+		windowsSendLog("Failed to detect default gateway: %v", err)
+		return
+	}
+	detectedGateway = gateway
+	setPhysicalInterface(ifIndex)
+	windowsSendLog("Detected physical gateway: %s (interface index %d)", gateway, ifIndex)
+
+	addBypassRoutesWindows(gateway, ifIndex)
+
+	go func() {
+		windowsSendLog("Waiting for %s interface to come up...", tunIface)
+		var tunIdx int
+		for i := 0; i < 150; i++ {
+			if ifc, err := net.InterfaceByName(tunIface); err == nil {
+				tunIdx = ifc.Index
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if tunIdx == 0 {
+			windowsSendLog("Timed out waiting for %s interface.", tunIface)
+			return
+		}
+		windowsSendLog("%s interface is up (index %d). Activating global routing...", tunIface, tunIdx)
+		addSplitDefaultRoutes(tunIdx)
+		setInterfaceDNS(tunIface, tunGateway)
+		windowsSendLog("VPN is fully established and routed.")
+	}()
+}
+
+func cleanupWindowsNetwork() {
+	windowsSendLog("Cleaning up network configuration...")
+	delSplitDefaultRoutes()
+	if detectedGateway != "" {
+		delBypassRoutesWindows(detectedGateway)
+	}
+	detectedGateway = ""
+	setPhysicalInterface(0)
+}
+
+func monitorNetworkChanges(stop chan struct{}) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			gateway, ifIndex, err := detectDefaultGateway()
+			if err != nil || gateway == "" {
+				continue
+			}
+			if gateway != detectedGateway {
+				windowsSendLog("Physical gateway changed: %q -> %q. Reconfiguring...", detectedGateway, gateway)
+				if detectedGateway != "" {
+					delBypassRoutesWindows(detectedGateway)
+				}
+				detectedGateway = gateway
+				setPhysicalInterface(ifIndex)
+				addBypassRoutesWindows(gateway, ifIndex)
+			}
+		}
+	}
+}
+
+// detectDefaultGateway returns the current physical default gateway IP and
+// its interface index, ignoring the VPN's own default routes (metric-sorted,
+// lowest first, which after the tunnel is up will normally be the tunnel
+// itself — callers that need the *physical* gateway should call this before
+// the tunnel comes up, or rely on detectedGateway captured at startup).
+func detectDefaultGateway() (gateway string, ifIndex uint32, err error) {
+	script := "$r = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop | " +
+		"Where-Object { $_.NextHop -ne '0.0.0.0' -and $_.InterfaceAlias -ne '" + tunIface + "' } | " +
+		"Sort-Object -Property RouteMetric | Select-Object -First 1; " +
+		"if ($r) { \"$($r.NextHop)|$($r.ifIndex)\" }"
+
+	out, cmdErr := exec.Command("powershell.exe", "-NoProfile", "-Command", script).Output()
+	if cmdErr != nil {
+		return "", 0, cmdErr
+	}
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return "", 0, fmt.Errorf("no default route found")
+	}
+	parts := strings.SplitN(line, "|", 2)
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("unexpected route output: %q", line)
+	}
+	gateway = strings.TrimSpace(parts[0])
+	idx, convErr := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if convErr != nil {
+		return "", 0, convErr
+	}
+	return gateway, uint32(idx), nil
+}
+
+func addBypassRoutesWindows(gateway string, ifIndex uint32) {
+	for _, rt := range bypassRoutes {
+		exec.Command("route.exe", "delete", rt.dest, "mask", rt.mask, gateway).Run()
+		if err := exec.Command("route.exe", "add", rt.dest, "mask", rt.mask, gateway,
+			"metric", "5", "if", strconv.FormatUint(uint64(ifIndex), 10)).Run(); err != nil {
+			windowsSendLog("Warning: failed to add bypass route %s/%s: %v", rt.dest, rt.mask, err)
+		} else {
+			windowsSendLog("Bypass route added: %s/%s -> %s", rt.dest, rt.mask, gateway)
+		}
+	}
+}
+
+func delBypassRoutesWindows(gateway string) {
+	for _, rt := range bypassRoutes {
+		exec.Command("route.exe", "delete", rt.dest, "mask", rt.mask, gateway).Run()
+	}
+}
+
+func addSplitDefaultRoutes(tunIdx int) {
+	ifStr := strconv.Itoa(tunIdx)
+	if err := exec.Command("route.exe", "add", "0.0.0.0", "mask", "128.0.0.0", tunGateway,
+		"metric", "1", "if", ifStr).Run(); err != nil {
+		windowsSendLog("Warning: failed to add split route 0.0.0.0/1: %v", err)
+	}
+	if err := exec.Command("route.exe", "add", "128.0.0.0", "mask", "128.0.0.0", tunGateway,
+		"metric", "1", "if", ifStr).Run(); err != nil {
+		windowsSendLog("Warning: failed to add split route 128.0.0.0/1: %v", err)
+	}
+}
+
+func delSplitDefaultRoutes() {
+	exec.Command("route.exe", "delete", "0.0.0.0", "mask", "128.0.0.0").Run()
+	exec.Command("route.exe", "delete", "128.0.0.0", "mask", "128.0.0.0").Run()
+}
+
+func setInterfaceDNS(iface, dns string) {
+	if err := exec.Command("netsh", "interface", "ip", "set", "dns",
+		fmt.Sprintf("name=%s", iface), "static", dns).Run(); err != nil {
+		windowsSendLog("Warning: failed to set DNS on %s: %v", iface, err)
+	}
+}
+
+// --- Service install / uninstall ---
+
+func installService() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
 	m, err := mgr.Connect()
@@ -180,57 +509,55 @@ func installService() error {
 	}
 	defer m.Disconnect()
 
-	if s, err := m.OpenService(serviceName); err == nil {
-		s.Close()
-		return fmt.Errorf("service %q is already installed", serviceName)
+	if existing, err := m.OpenService(serviceName); err == nil {
+		existing.Close()
+		return fmt.Errorf("service %q is already installed; run 'uninstall' first", serviceName)
 	}
 
-	s, err := m.CreateService(serviceName, exepath, mgr.Config{
+	s, err := m.CreateService(serviceName, exePath, mgr.Config{
 		DisplayName:  displayName,
 		Description:  description,
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
-	}, "run")
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create service: %w", err)
 	}
 	defer s.Close()
 
-	if err := eventlog.InstallAsEventCreate(serviceName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
-		fmt.Printf("Warning: failed to register Event Log source: %v\n", err)
+	if err := s.SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 10 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+	}, 86400); err != nil {
+		windowsSendLog("Warning: failed to set recovery actions: %v", err)
+	}
+
+	if err := eventlog.InstallAsEventCreate(serviceName, eventlog.Info|eventlog.Warning|eventlog.Error); err != nil {
+		windowsSendLog("Warning: failed to install event log source: %v", err)
 	}
 
 	if err := s.Start(); err != nil {
-		return fmt.Errorf("service created but failed to start: %w", err)
+		return fmt.Errorf("service installed but failed to start: %w", err)
 	}
 
-	return nil
+	return waitForState(s, svc.Running, 15*time.Second)
 }
 
 func removeService() error {
-	m, err := mgr.Connect()
+	m, s, err := openService()
 	if err != nil {
-		return fmt.Errorf("failed to connect to service manager (administrator privileges required?): %w", err)
+		return err
 	}
 	defer m.Disconnect()
-
-	s, err := m.OpenService(serviceName)
-	if err != nil {
-		return fmt.Errorf("service %q is not installed: %w", serviceName, err)
-	}
 	defer s.Close()
 
-	if status, err := s.Control(svc.Stop); err == nil {
-		timeout := time.Now().Add(10 * time.Second)
-		for status.State != svc.Stopped {
-			if time.Now().After(timeout) {
-				break
-			}
-			time.Sleep(300 * time.Millisecond)
-			status, err = s.Query()
-			if err != nil {
-				break
-			}
+	status, err := s.Query()
+	if err == nil && status.State != svc.Stopped {
+		if _, err := s.Control(svc.Stop); err != nil {
+			windowsSendLog("Warning: failed to stop service before removal: %v", err)
+		} else {
+			waitForState(s, svc.Stopped, 15*time.Second)
 		}
 	}
 
@@ -239,133 +566,8 @@ func removeService() error {
 	}
 
 	if err := eventlog.Remove(serviceName); err != nil {
-		fmt.Printf("Warning: failed to remove Event Log source: %v\n", err)
+		windowsSendLog("Warning: failed to remove event log source: %v", err)
 	}
 
 	return nil
-}
-
-func runCmd(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		windowsSendLog("Command %q %v failed: %v (%s)", name, args, err, strings.TrimSpace(string(out)))
-	}
-	return err
-}
-
-func detectGatewayAndIface() (string, uint32, error) {
-	out, err := exec.Command("route", "print", "-4").Output()
-	if err != nil {
-		return "", 0, err
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 5 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
-			gw := fields[2]
-			localAddr := fields[3]
-			if net.ParseIP(gw) == nil {
-				continue
-			}
-			ifcs, err := net.Interfaces()
-			if err != nil {
-				return gw, 0, nil
-			}
-			for _, ifc := range ifcs {
-				addrs, aerr := ifc.Addrs()
-				if aerr != nil {
-					continue
-				}
-				for _, a := range addrs {
-					if ipn, ok := a.(*net.IPNet); ok && ipn.IP.String() == localAddr {
-						return gw, uint32(ifc.Index), nil
-					}
-				}
-			}
-			return gw, 0, nil
-		}
-	}
-	return "", 0, fmt.Errorf("failed to find default gateway in route print output")
-}
-
-func pinRoutes(gateway string) {
-	runCmd("route", "delete", serverIP)
-	if err := runCmd("route", "add", serverIP, "mask", "255.255.255.255", gateway); err == nil {
-		windowsSendLog("Server route pinned: %s -> %s", serverIP, gateway)
-	}
-
-	for _, b := range bypassRoutes {
-		runCmd("route", "delete", b.dest)
-		if err := runCmd("route", "add", b.dest, "mask", b.mask, gateway); err == nil {
-			windowsSendLog("Bypass route added: %s/%s -> %s", b.dest, b.mask, gateway)
-		}
-	}
-}
-
-func setupWindowsNetwork() {
-	gateway, ifIndex, err := detectGatewayAndIface()
-	if err != nil {
-		windowsSendLog("CRITICAL: failed to detect physical gateway: %v", err)
-		return
-	}
-	detectedGateway = gateway
-	setPhysicalInterface(ifIndex)
-	windowsSendLog("Detected physical gateway: %s (interface index %d)", gateway, ifIndex)
-
-	pinRoutes(gateway)
-
-	go func() {
-		windowsSendLog("Waiting for the %s interface to be created by GOST/wintun...", tunIface)
-		var idx int
-		for {
-			if ifc, err := net.InterfaceByName(tunIface); err == nil {
-				idx = ifc.Index
-				break
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-		windowsSendLog("Interface %s detected (index %d)! Activating global routing...", tunIface, idx)
-
-		ifStr := fmt.Sprintf("%d", idx)
-		runCmd("route", "add", "0.0.0.0", "mask", "128.0.0.0", tunGateway, "if", ifStr, "metric", "1")
-		runCmd("route", "add", "128.0.0.0", "mask", "128.0.0.0", tunGateway, "if", ifStr, "metric", "1")
-
-		runCmd("netsh", "interface", "ipv4", "set", "dns", "name="+tunIface, "static", tunGateway)
-
-		windowsSendLog("VPN is fully established and routed. Enjoy!")
-	}()
-}
-
-func monitorNetworkChanges(stop <-chan struct{}) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-			gw, idx, err := detectGatewayAndIface()
-			if err != nil {
-				continue
-			}
-			if gw != detectedGateway || (idx != 0 && idx != physIfaceIndex.Load()) {
-				windowsSendLog("Network change detected: gateway %s -> %s (interface index %d). Re-pinning routes...", detectedGateway, gw, idx)
-				detectedGateway = gw
-				setPhysicalInterface(idx)
-				pinRoutes(gw)
-			}
-		}
-	}
-}
-
-func cleanupWindowsNetwork() {
-	windowsSendLog("Cleaning up network routes...")
-	runCmd("route", "delete", "0.0.0.0", "mask", "128.0.0.0")
-	runCmd("route", "delete", "128.0.0.0", "mask", "128.0.0.0")
-	runCmd("route", "delete", serverIP)
-	for _, b := range bypassRoutes {
-		runCmd("route", "delete", b.dest)
-	}
-	runCmd("netsh", "interface", "ipv4", "set", "dns", "name="+tunIface, "dhcp")
-	windowsSendLog("Cleanup completed.")
 }
