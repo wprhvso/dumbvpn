@@ -1,4 +1,5 @@
 name: Release
+
 on:
   push:
     tags: ["v*"]
@@ -7,23 +8,37 @@ on:
       version:
         description: "Release version (e.g. v0.1.4)"
         required: true
+
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   VERSION: ${{ github.event.inputs.version || github.ref_name }}
+  GRADLE_VERSION: "8.7"
+  NDK_VERSION: "26.3.11579264"
+  WINTUN_VERSION: "0.14.1"
   LDFLAGS_CONFIG: >-
     -X main.buildServerIP=${{ secrets.SERVER_IP }}
     -X main.buildServerPort=${{ secrets.SERVER_PORT }}
     -X main.buildRelayUser=${{ secrets.RELAY_USER }}
     -X main.buildRelayPass=${{ secrets.RELAY_PASS }}
+
 jobs:
   build-windows:
+    name: Build (Windows binary)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-core/go.mod
+          cache-dependency-path: go-core/go.sum
+
       - name: Build dumbvpn.exe
         working-directory: go-core
         env:
@@ -34,80 +49,136 @@ jobs:
           go build -trimpath \
             -ldflags "-s -w ${{ env.LDFLAGS_CONFIG }}" \
             -o dumbvpn.exe .
+
       - name: Fetch wintun.dll
         run: |
-          curl -sSL -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          curl -fsSL --retry 3 -o wintun.zip \
+            "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip"
           unzip -q wintun.zip -d wintun-extract
-          cp wintun-extract/wintun/bin/amd64/wintun.dll wintun.dll
+          test -f wintun-extract/wintun/bin/amd64/wintun.dll
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p stage
+          cp go-core/dumbvpn.exe stage/
+          cp wintun-extract/wintun/bin/amd64/wintun.dll stage/
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: |
-            go-core/dumbvpn.exe
-            wintun.dll
+          path: stage/*
+          if-no-files-found: error
+          retention-days: 1
+
   build-android:
+    name: Build (Android APK)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-core/go.mod
+          cache-dependency-path: go-core/go.sum
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
       - uses: android-actions/setup-android@v3
+
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.7"
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-read-only: false
+
       - name: Install NDK
         run: |
-          sdkmanager "ndk;26.3.11579264"
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          sdkmanager "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
       - name: Build Go shared libraries
         working-directory: go-core
         run: |
+          set -euo pipefail
           L="-s -w -buildid= ${{ env.LDFLAGS_CONFIG }}"
           TC="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          mkdir -p ../android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p ../android/app/src/main/jniLibs/armeabi-v7a
+          JNI="../android/app/src/main/jniLibs"
+          mkdir -p "$JNI/arm64-v8a" "$JNI/armeabi-v7a"
+
           CGO_ENABLED=1 GOOS=android GOARCH=arm64 \
             CC="$TC/aarch64-linux-android34-clang" \
             go build -trimpath -ldflags "$L" -buildmode=c-shared \
-            -o ../android/app/src/main/jniLibs/arm64-v8a/libdumbvpn.so .
+            -o "$JNI/arm64-v8a/libdumbvpn.so" .
+
           CGO_ENABLED=1 GOOS=android GOARCH=arm GOARM=7 \
             CC="$TC/armv7a-linux-androideabi34-clang" \
             go build -trimpath -ldflags "$L" -buildmode=c-shared \
-            -o ../android/app/src/main/jniLibs/armeabi-v7a/libdumbvpn.so .
+            -o "$JNI/armeabi-v7a/libdumbvpn.so" .
+
+          test -f "$JNI/arm64-v8a/libdumbvpn.so"
+          test -f "$JNI/armeabi-v7a/libdumbvpn.so"
+
       - name: Build APK
         working-directory: android
         run: |
           gradle --version
-          gradle :app:assembleRelease
+          gradle :app:assembleRelease --no-daemon
+
       - uses: actions/upload-artifact@v4
         with:
           name: android
           path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 1
+
   release:
+    name: Encrypt & publish release
     needs: [build-windows, build-android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-      - name: Encrypt artifacts
+
+      - name: Verify expected artifacts
         run: |
+          set -euo pipefail
+          ls -laR dist
+          test -f dist/windows/dumbvpn.exe
+          test -f dist/windows/wintun.dll
+          compgen -G "dist/android/*.apk" > /dev/null
+
+      - name: Encrypt artifacts
+        env:
+          ENC_KEY: ${{ secrets.RELEASE_ENC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ENC_KEY" ]; then
+            echo "RELEASE_ENC_KEY secret is not set" >&2
+            exit 1
+          fi
           mkdir -p out
           for f in dist/windows/dumbvpn.exe dist/windows/wintun.dll dist/android/*.apk; do
             openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
               -in "$f" -out "out/$(basename "$f").enc" \
-              -pass "pass:${{ secrets.RELEASE_ENC_KEY }}"
+              -pass env:ENC_KEY
           done
           (cd out && sha256sum *.enc > SHA256SUMS.txt)
+          ls -la out
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$VERSION" out/*.enc out/SHA256SUMS.txt \
-            -R "${{ github.repository }}" \
-            --title "$VERSION" --generate-notes
+          set -euo pipefail
+          if gh release view "$VERSION" -R "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Release $VERSION already exists, uploading assets (clobber)..."
+            gh release upload "$VERSION" out/*.enc out/SHA256SUMS.txt \
+              -R "${{ github.repository }}" --clobber
+          else
+            gh release create "$VERSION" out/*.enc out/SHA256SUMS.txt \
+              -R "${{ github.repository }}" \
+              --title "$VERSION" --generate-notes
+          fi
