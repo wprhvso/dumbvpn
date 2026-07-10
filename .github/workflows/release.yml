@@ -39,6 +39,14 @@ jobs:
           go-version-file: go-core/go.mod
           cache-dependency-path: go-core/go.sum
 
+      - name: Fetch wintun.dll
+        run: |
+          curl -fsSL --retry 3 -o wintun.zip \
+            "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip"
+          unzip -q wintun.zip -d wintun-extract
+          test -f wintun-extract/wintun/bin/amd64/wintun.dll
+          cp wintun-extract/wintun/bin/amd64/wintun.dll go-core/wintun.dll
+
       - name: Build dumbvpn.exe
         working-directory: go-core
         env:
@@ -49,13 +57,6 @@ jobs:
           go build -trimpath \
             -ldflags "-s -w ${{ env.LDFLAGS_CONFIG }}" \
             -o dumbvpn.exe .
-
-      - name: Fetch wintun.dll
-        run: |
-          curl -fsSL --retry 3 -o wintun.zip \
-            "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip"
-          unzip -q wintun.zip -d wintun-extract
-          test -f wintun-extract/wintun/bin/amd64/wintun.dll
 
       - name: Stage artifacts
         run: |

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/debug"
 	"golang.org/x/sys/windows/svc/eventlog"
@@ -45,7 +46,7 @@ var (
 
 func init() {
 	sendLog = windowsSendLog
-	platformInit = func() {}
+	platformInit = extractWintun
 	directDialContext = windowsDirectDial
 }
 
@@ -74,8 +75,52 @@ Commands:
   uninstall   Stop and remove the service
   run         Run the VPN engine (this is how the service launches)
 
+Running with no command installs the service (elevates via UAC if needed).
 Commands that manage the service require administrator privileges.
 `, os.Args[0])
+}
+
+func isAdmin() bool {
+	var sid *windows.SID
+	err := windows.AllocateAndInitializeSid(
+		&windows.SECURITY_NT_AUTHORITY,
+		2,
+		windows.SECURITY_BUILTIN_DOMAIN_RID,
+		windows.DOMAIN_ALIAS_RID_ADMINS,
+		0, 0, 0, 0, 0, 0,
+		&sid,
+	)
+	if err != nil {
+		return false
+	}
+	defer windows.FreeSid(sid)
+
+	token := windows.Token(0)
+	member, err := token.IsMember(sid)
+	if err != nil {
+		return false
+	}
+	return member
+}
+
+func relaunchElevated(args []string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	verb, _ := windows.UTF16PtrFromString("runas")
+	file, _ := windows.UTF16PtrFromString(exe)
+
+	var params *uint16
+	if len(args) > 0 {
+		params, _ = windows.UTF16PtrFromString(strings.Join(args, " "))
+	}
+
+	cwd, _ := os.Getwd()
+	dir, _ := windows.UTF16PtrFromString(cwd)
+
+	return windows.ShellExecute(0, verb, file, params, dir, windows.SW_NORMAL)
 }
 
 func main() {
@@ -85,7 +130,24 @@ func main() {
 			runService()
 			return
 		}
-		usage()
+
+		if !isAdmin() {
+			fmt.Println("Administrator privileges required to install; requesting elevation...")
+			if err := relaunchElevated([]string{"install"}); err != nil {
+				fmt.Printf("Elevation failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		fmt.Println("No command given; installing DumbVPN service...")
+		if err := installService(); err != nil {
+			fmt.Printf("Install failed: %v\n", err)
+			fmt.Println()
+			usage()
+			os.Exit(1)
+		}
+		fmt.Printf("Service %q installed and started (auto-start enabled).\n", serviceName)
 		return
 	}
 
@@ -349,8 +411,6 @@ loop:
 	return false, 0
 }
 
-// --- Network configuration (Windows: route.exe / netsh, no iptables/ip route equivalent) ---
-
 func setupWindowsNetwork(stop chan struct{}) {
 	var gateway string
 	var ifIndex uint32
@@ -476,11 +536,6 @@ func splitDefaultRoutesPresent() bool {
 	return hasLow && hasHigh
 }
 
-// detectDefaultGateway returns the current physical default gateway IP and
-// its interface index, ignoring the VPN's own default routes (metric-sorted,
-// lowest first, which after the tunnel is up will normally be the tunnel
-// itself — callers that need the *physical* gateway should call this before
-// the tunnel comes up, or rely on detectedGateway captured at startup).
 func detectDefaultGateway() (gateway string, ifIndex uint32, err error) {
 	script := "$r = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop | " +
 		"Where-Object { $_.NextHop -ne '0.0.0.0' -and $_.InterfaceAlias -ne '" + tunIface + "' } | " +
@@ -548,8 +603,6 @@ func setInterfaceDNS(iface, dns string) {
 		windowsSendLog("Warning: failed to set DNS on %s: %v", iface, err)
 	}
 }
-
-// --- Service install / uninstall ---
 
 func installService() error {
 	exePath, err := os.Executable()
