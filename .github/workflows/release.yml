@@ -81,7 +81,9 @@ jobs:
             -o ../android/app/src/main/jniLibs/armeabi-v7a/libdumbvpn.so .
       - name: Build APK
         working-directory: android
-        run: gradle-8.7 :app:assembleRelease
+        run: |
+          gradle --version
+          gradle :app:assembleRelease
       - uses: actions/upload-artifact@v4
         with:
           name: android
