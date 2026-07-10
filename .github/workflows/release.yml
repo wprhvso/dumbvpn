@@ -62,7 +62,6 @@ jobs:
         run: |
           mkdir -p stage
           cp go-core/dumbvpn.exe stage/
-          cp wintun-extract/wintun/bin/amd64/wintun.dll stage/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -148,7 +147,6 @@ jobs:
           set -euo pipefail
           ls -laR dist
           test -f dist/windows/dumbvpn.exe
-          test -f dist/windows/wintun.dll
           compgen -G "dist/android/*.apk" > /dev/null
 
       - name: Encrypt artifacts
@@ -161,7 +159,7 @@ jobs:
             exit 1
           fi
           mkdir -p out
-          for f in dist/windows/dumbvpn.exe dist/windows/wintun.dll dist/android/*.apk; do
+          for f in dist/windows/dumbvpn.exe dist/android/*.apk; do
             openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
               -in "$f" -out "out/$(basename "$f").enc" \
               -pass env:ENC_KEY

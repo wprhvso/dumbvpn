@@ -23,7 +23,7 @@
       {
         packages.default = goBuilder.buildGoApplication {
           pname = "dumbvpn";
-          version = "0.1.5";
+          version = "0.1.6";
           src = ./go-core;
           modules = ./go-core/gomod2nix.toml;
           GOSUMDB = "off";

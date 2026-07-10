@@ -49,6 +49,54 @@ jar:
 ls:
     nu -c "ls android/app/build/outputs/apk/release/"
 
+major: (_bump "major")
+
+minor: (_bump "minor")
+
+patch: (_bump "patch")
+
+_bump PART:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    GRADLE_FILE="android/app/build.gradle"
+    FLAKE_FILE="flake.nix"
+
+    gradle_ver="$(sed -n 's/.*versionName "\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/p' "$GRADLE_FILE" | head -n1)"
+    flake_ver="$(sed -n 's/.*version = "\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/p' "$FLAKE_FILE" | head -n1)"
+
+    if [ -z "$gradle_ver" ]; then
+        echo "ERROR: could not parse version from $GRADLE_FILE" >&2
+        exit 1
+    fi
+    if [ -z "$flake_ver" ]; then
+        echo "ERROR: could not parse version from $FLAKE_FILE" >&2
+        exit 1
+    fi
+    if [ "$gradle_ver" != "$flake_ver" ]; then
+        echo "ERROR: version mismatch: $GRADLE_FILE=$gradle_ver, $FLAKE_FILE=$flake_ver" >&2
+        exit 1
+    fi
+
+    major="$(echo "$gradle_ver" | cut -d. -f1)"
+    minor="$(echo "$gradle_ver" | cut -d. -f2)"
+    patch="$(echo "$gradle_ver" | cut -d. -f3)"
+
+    case "{{PART}}" in
+        major) new_ver="$((major + 1)).0.0" ;;
+        minor) new_ver="${major}.$((minor + 1)).0" ;;
+        patch) new_ver="${major}.${minor}.$((patch + 1))" ;;
+        *)
+            echo "ERROR: unknown bump part '{{PART}}'" >&2
+            exit 1
+            ;;
+    esac
+
+    sed -i "s/versionName \"${gradle_ver}\"/versionName \"${new_ver}\"/" "$GRADLE_FILE"
+    sed -i "s/version = \"${flake_ver}\"/version = \"${new_ver}\"/" "$FLAKE_FILE"
+
+    echo "Bumped version: $gradle_ver -> $new_ver"
+
 log:
     adb logcat --pid=$(adb shell pidof -s ru.murasya.vpn)
 
@@ -69,6 +117,11 @@ get VERSION:
     export ENC_KEY
 
     DEST="releases/{{VERSION}}"
+    if [ -e "$DEST" ]; then
+        echo "ERROR: $DEST already exists." >&2
+        exit 1
+    fi
+
     TMP="$DEST/.enc"
     mkdir -p "$TMP"
 
@@ -84,6 +137,25 @@ get VERSION:
 
     rm -rf "$TMP"
     ls -la "$DEST"
+
+latest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    version="$(gh release view --json tagName -q .tagName)"
+    if [ -z "$version" ]; then
+        echo "ERROR: could not determine latest release." >&2
+        exit 1
+    fi
+
+    DEST="releases/$version"
+    if [ -e "$DEST" ]; then
+        echo "ERROR: $DEST already exists." >&2
+        exit 1
+    fi
+
+    just get "$version" >/dev/null
+    echo "Downloaded latest release: $version"
 
 push-secrets:
     #!/usr/bin/env bash
@@ -112,3 +184,7 @@ push-secrets:
     }
 
     set_secret SERVER_IP       ip
+    set_secret SERVER_PORT     port
+    set_secret RELAY_USER      user
+    set_secret RELAY_PASS      password
+    set_secret RELEASE_ENC_KEY enc_key
