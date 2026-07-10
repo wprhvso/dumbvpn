@@ -1,5 +1,4 @@
 name: Release
-
 on:
   push:
     tags: ["v*"]
@@ -8,10 +7,8 @@ on:
       version:
         description: "Release version (e.g. v0.1.4)"
         required: true
-
 permissions:
   contents: write
-
 env:
   VERSION: ${{ github.event.inputs.version || github.ref_name }}
   LDFLAGS_CONFIG: >-
@@ -19,17 +16,14 @@ env:
     -X main.buildServerPort=${{ secrets.SERVER_PORT }}
     -X main.buildRelayUser=${{ secrets.RELAY_USER }}
     -X main.buildRelayPass=${{ secrets.RELAY_PASS }}
-
 jobs:
   build-windows:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-core/go.mod
-
       - name: Build dumbvpn.exe
         working-directory: go-core
         env:
@@ -40,43 +34,36 @@ jobs:
           go build -trimpath \
             -ldflags "-s -w ${{ env.LDFLAGS_CONFIG }}" \
             -o dumbvpn.exe .
-
       - name: Fetch wintun.dll
         run: |
           curl -sSL -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
           unzip -q wintun.zip -d wintun-extract
           cp wintun-extract/wintun/bin/amd64/wintun.dll wintun.dll
-
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
             go-core/dumbvpn.exe
             wintun.dll
-
   build-android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-core/go.mod
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-
       - uses: android-actions/setup-android@v3
-
       - uses: gradle/actions/setup-gradle@v4
-
+        with:
+          gradle-version: "8.7"
       - name: Install NDK
         run: |
           sdkmanager "ndk;26.3.11579264"
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
-
       - name: Build Go shared libraries
         working-directory: go-core
         run: |
@@ -92,16 +79,13 @@ jobs:
             CC="$TC/armv7a-linux-androideabi34-clang" \
             go build -trimpath -ldflags "$L" -buildmode=c-shared \
             -o ../android/app/src/main/jniLibs/armeabi-v7a/libdumbvpn.so .
-
       - name: Build APK
         working-directory: android
-        run: gradle :app:assembleRelease
-
+        run: gradle-8.7 :app:assembleRelease
       - uses: actions/upload-artifact@v4
         with:
           name: android
           path: android/app/build/outputs/apk/release/*.apk
-
   release:
     needs: [build-windows, build-android]
     runs-on: ubuntu-latest
@@ -109,7 +93,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-
       - name: Encrypt artifacts
         run: |
           mkdir -p out
@@ -119,7 +102,6 @@ jobs:
               -pass "pass:${{ secrets.RELEASE_ENC_KEY }}"
           done
           (cd out && sha256sum *.enc > SHA256SUMS.txt)
-
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
