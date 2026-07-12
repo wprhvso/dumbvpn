@@ -3,3 +3,4 @@
 *.keystore
 gomod2nix.toml
 go.sum
+*.png
