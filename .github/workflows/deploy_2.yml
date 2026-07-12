@@ -11,7 +11,7 @@ jobs:
         run: |
           wget -q https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_amd64.tar.gz
           tar -xzf gost_3.2.6_linux_amd64.tar.gz
-          nohup ./gost -L relay+wss://${{ secrets.RELAY_USER }}:${{ secrets.RELAY_PASS }}@:8443 > /dev/null 2>&1 &
+          nohup ./gost -L relay+wss://${{ secrets.RELAY_USER }}:${{ secrets.RELAY_PASS }}@:8443?path=/api/v1/relay > /dev/null 2>&1 &
       - name: Setup FRP
         run: |
           wget -q https://github.com/fatedier/frp/releases/download/v0.70.0/frp_0.70.0_linux_amd64.tar.gz
