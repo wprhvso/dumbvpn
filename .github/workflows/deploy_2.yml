@@ -1,0 +1,34 @@
+name: Run Tunnels
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Gost
+        run: |
+          wget -q https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_amd64.tar.gz
+          tar -xzf gost_3.2.6_linux_amd64.tar.gz
+          nohup ./gost -L relay+wss://${{ secrets.RELAY_USER }}:${{ secrets.RELAY_PASS }}@:8443 > /dev/null 2>&1 &
+      - name: Setup FRP
+        run: |
+          wget -q https://github.com/fatedier/frp/releases/download/v0.70.0/frp_0.70.0_linux_amd64.tar.gz
+          tar -xzf frp_0.70.0_linux_amd64.tar.gz
+          cat <<EOF > frp_0.70.0_linux_amd64/frpc.toml
+          serverAddr = "${{ secrets.SERVER_IP }}"
+          serverPort = 7000
+          auth.method = "token"
+          auth.token = "${{ secrets.FRP_TOKEN }}"
+          [[proxies]]
+          name = "gost-tunnel"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 8443
+          remotePort = ${{ secrets.SERVER_PORT }}
+          EOF
+          cd frp_0.70.0_linux_amd64
+          nohup ./frpc -c frpc.toml > /dev/null 2>&1 &
+      - name: Sleep
+        run: sleep 21600

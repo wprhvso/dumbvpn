@@ -188,3 +188,4 @@ push-secrets:
     set_secret RELAY_USER      user
     set_secret RELAY_PASS      password
     set_secret RELEASE_ENC_KEY enc_key
+    set_secret FRP_TOKEN       frp
